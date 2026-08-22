@@ -1,4 +1,11 @@
-const { Client, LocalAuth, Poll, List, MessageMedia, Buttons } = require('whatsapp-web.js');
+const {
+    default: makeWASocket,
+    useMultiFileAuthState,
+    DisconnectReason,
+    makeCacheableSignalKeyStore,
+    fetchLatestBaileysVersion
+} = require('@whiskeysockets/baileys');
+const pino = require('pino');
 const QRCode = require('qrcode');
 const qrcodeTerminal = require('qrcode-terminal');
 const express = require('express');
@@ -11,6 +18,7 @@ const { CohereClient } = require('cohere-ai');
 const app = express();
 const server = http.createServer(app);
 const io = socketIo(server);
+const logger = pino({ level: 'silent' });
 
 app.use(express.json());
 app.use(express.static('public'));
@@ -138,130 +146,135 @@ function createSupportTicket(name, phone, reason) { const t = { id: 'TK' + Date.
 function subscribeToOffers(phone, name) { if (!DB.subscribers) DB.subscribers = []; if (DB.subscribers.find(s => s.phone === phone)) return false; DB.subscribers.push({ phone, name, subscribedAt: new Date().toLocaleString('ar-EG'), active: true }); saveDB(); return true; }
 function unsubscribeFromOffers(phone) { if (!DB.subscribers) return false; const i = DB.subscribers.findIndex(s => s.phone === phone); if (i === -1) return false; DB.subscribers[i].active = false; saveDB(); return true; }
 
+// Baileys send helper
+async function sendMsg(sock, jid, text) {
+    await sock.sendMessage(jid, { text });
+}
+
 // Execute actions triggered by AI
-async function executeAction(action, params, client, phone, name) {
+async function executeAction(action, params, sock, phone, name) {
     switch (action) {
         case 'show_products': {
-            if (!DATA.products.length) return await client.sendMessage(phone, 'مفيش منتجات حالياً يا غالي');
+            if (!DATA.products.length) return await sendMsg(sock, phone, 'مفيش منتجات حالياً يا غالي');
             let msg = 'يلا نشوف اللي عندنا! 🛒\n\n';
             DATA.products.forEach(p => { msg += formatProduct(p) + '\n\n'; });
             msg += 'قوللي رقم لو عايز تشتري 😊';
-            return await client.sendMessage(phone, msg);
+            return await sendMsg(sock, phone, msg);
         }
         case 'search': {
             const results = searchProducts(params.query || '');
-            if (!results.length) return await client.sendMessage(phone, `مش لاقي حاجة باسم "${params.query}" 🤔\nجرّب كلمة تانية.`);
+            if (!results.length) return await sendMsg(sock, phone, `مش لاقي حاجة باسم "${params.query}" 🤔\nجرّب كلمة تانية.`);
             let msg = `🔍 نتائج البحث عن "${params.query}":\n\n`;
             results.forEach((p, i) => { msg += `${i + 1}. ${formatProduct(p)}\n\n`; });
             msg += 'قوللي رقم لو عايز تشتري 😊';
-            return await client.sendMessage(phone, msg);
+            return await sendMsg(sock, phone, msg);
         }
         case 'create_account': {
             const state = getUserState(phone);
-            if (findCustomerByPhone(phone)) return await client.sendMessage(phone, `عندك حساب بالفعل يا ${name}! 😄`);
+            if (findCustomerByPhone(phone)) return await sendMsg(sock, phone, `عندك حساب بالفعل يا ${name}! 😄`);
             state.step = 'collecting_account_name';
-            return await client.sendMessage(phone, `يلا نعملك حساب يا ${name}! 🤝\nقوللي اسمك الكامل:`);
+            return await sendMsg(sock, phone, `يلا نعملك حساب يا ${name}! 🤝\nقوللي اسمك الكامل:`);
         }
         case 'create_store': {
             const state = getUserState(phone);
             state.step = 'collecting_store_owner';
-            return await client.sendMessage(phone, 'يلا نعملك متجر! 🏪\nقوللي اسمك الكامل:');
+            return await sendMsg(sock, phone, 'يلا نعملك متجر! 🏪\nقوللي اسمك الكامل:');
         }
         case 'buy': {
             const state = getUserState(phone);
             state.step = 'buying_select_product';
             let msg = 'يلا نتسوق! 🛒 اختار رقم المنتج:\n\n';
             DATA.products.filter(p => p.stock > 0).forEach(p => { msg += `${p.id}️⃣ ${p.name} - ${p.price} ج.م\n`; });
-            return await client.sendMessage(phone, msg);
+            return await sendMsg(sock, phone, msg);
         }
         case 'track_order': {
             const state = getUserState(phone);
             state.step = 'tracking_phone';
-            return await client.sendMessage(phone, 'قوللي رقم تليفونك وأنا أقولك على حالة طلبك 📦');
+            return await sendMsg(sock, phone, 'قوللي رقم تليفونك وأنا أقولك على حالة طلبك 📦');
         }
         case 'support': {
             const ticket = createSupportTicket(name, phone, params.reason || 'طلب دعم');
-            return await client.sendMessage(phone, `📞 فريق الدعم هيتواصل معاك:\n\nرقم الدعم: *${DATA.company?.supportPhone || '01274446542'}*\nرقم التذكرة: ${ticket.id}\n\n💯 في أقرب وقت يا ${name}!`);
+            return await sendMsg(sock, phone, `📞 فريق الدعم هيتواصل معاك:\n\nرقم الدعم: *${DATA.company?.supportPhone || '01274446542'}*\nرقم التذكرة: ${ticket.id}\n\n💯 في أقرب وقت يا ${name}!`);
         }
         case 'subscribe_offers': {
-            if (subscribeToOffers(phone, name)) return await client.sendMessage(phone, '🎉 تم تسجيلك! هنبعتلك أي عرض جديد.');
-            return await client.sendMessage(phone, 'أنت مشترك بالفعل 😄');
+            if (subscribeToOffers(phone, name)) return await sendMsg(sock, phone, '🎉 تم تسجيلك! هنبعتلك أي عرض جديد.');
+            return await sendMsg(sock, phone, 'أنت مشترك بالفعل 😄');
         }
         case 'unsubscribe_offers': {
-            if (unsubscribeFromOffers(phone)) return await client.sendMessage(phone, '✅ تم إلغاء الاشتراك.');
-            return await client.sendMessage(phone, 'أنت مش مشترك أصلاً 😄');
+            if (unsubscribeFromOffers(phone)) return await sendMsg(sock, phone, '✅ تم إلغاء الاشتراك.');
+            return await sendMsg(sock, phone, 'أنت مش مشترك أصلاً 😄');
         }
         default: return null;
     }
 }
 
 // Form steps handler
-async function handleFormSteps(state, body, client, phone, name) {
+async function handleFormSteps(state, body, sock, phone, name) {
     const step = state.step;
 
-    if (step === 'collecting_account_name') { state.data.name = body; state.step = 'collecting_account_phone'; return await client.sendMessage(phone, `تمام يا ${body}! 🤝\nubicado رقم تليفونك:`); }
-    if (step === 'collecting_account_phone') { state.data.phone = body; state.step = 'collecting_account_email'; return await client.sendMessage(phone, 'آخر حاجة - EMAIL (لو مش عايز اكتب "مش عايز"):'); }
+    if (step === 'collecting_account_name') { state.data.name = body; state.step = 'collecting_account_phone'; return await sendMsg(sock, phone, `تمام يا ${body}! 🤝\nubicado رقم تليفونك:`); }
+    if (step === 'collecting_account_phone') { state.data.phone = body; state.step = 'collecting_account_email'; return await sendMsg(sock, phone, 'آخر حاجة - EMAIL (لو مش عايز اكتب "مش عايز"):'); }
     if (step === 'collecting_account_email') {
         state.data.email = body === 'مش عايز' ? '' : body;
         const c = createCustomer(state.data.name, state.data.phone, state.data.email);
         state.step = 'start'; state.data = {};
-        return await client.sendMessage(phone, `يييس! تم الحساب يا ${c.name}! 🎉\n📱 تليفونك: ${c.phone}\n\nدلوقتي تقدر تتسوق 😎`);
+        return await sendMsg(sock, phone, `يييس! تم الحساب يا ${c.name}! 🎉\n📱 تليفونك: ${c.phone}\n\nدلوقتي تقدر تتسوق 😎`);
     }
 
-    if (step === 'collecting_store_owner') { state.data.ownerName = body; state.step = 'collecting_store_name'; return await client.sendMessage(phone, `حلو يا ${body}! 😄\nاسم المتجر:`); }
-    if (step === 'collecting_store_name') { state.data.storeName = body; state.step = 'collecting_store_category'; return await client.sendMessage(phone, 'المتجر في أنهي مجال؟ (إلكترونيات، ملابس..)'); }
-    if (step === 'collecting_store_category') { state.data.category = body; state.step = 'collecting_store_city'; return await client.sendMessage(phone, 'أي مدينة؟ 🏙️'); }
-    if (step === 'collecting_store_city') { state.data.city = body; state.step = 'collecting_store_phone'; return await client.sendMessage(phone, 'رقم التليفون:'); }
-    if (step === 'collecting_store_phone') { state.data.phone = body; state.step = 'collecting_store_desc'; return await client.sendMessage(phone, 'قولنا كلمة عن المتجر (بتبيع ايه):'); }
+    if (step === 'collecting_store_owner') { state.data.ownerName = body; state.step = 'collecting_store_name'; return await sendMsg(sock, phone, `حلو يا ${body}! 😄\nاسم المتجر:`); }
+    if (step === 'collecting_store_name') { state.data.storeName = body; state.step = 'collecting_store_category'; return await sendMsg(sock, phone, 'المتجر في أنهي مجال؟ (إلكترونيات، ملابس..)'); }
+    if (step === 'collecting_store_category') { state.data.category = body; state.step = 'collecting_store_city'; return await sendMsg(sock, phone, 'أي مدينة؟ 🏙️'); }
+    if (step === 'collecting_store_city') { state.data.city = body; state.step = 'collecting_store_phone'; return await sendMsg(sock, phone, 'رقم التليفون:'); }
+    if (step === 'collecting_store_phone') { state.data.phone = body; state.step = 'collecting_store_desc'; return await sendMsg(sock, phone, 'قولنا كلمة عن المتجر (بتبيع ايه):'); }
     if (step === 'collecting_store_desc') {
         state.data.description = body; state.step = 'collecting_store_confirm';
-        return await client.sendMessage(phone, `يلا نشوف! 🏪\n\n👤 المالك: ${state.data.ownerName}\n🏪 المتجر: ${state.data.storeName}\n📂 المجال: ${state.data.category}\n🏙️ المدينة: ${state.data.city}\n📱 التليفون: ${state.data.phone}\n📝 الوصف: ${state.data.description}\n\nموافق قول "تمام" أو "لغي"`);
+        return await sendMsg(sock, phone, `يلا نشوف! 🏪\n\n👤 المالك: ${state.data.ownerName}\n🏪 المتجر: ${state.data.storeName}\n📂 المجال: ${state.data.category}\n🏙️ المدينة: ${state.data.city}\n📱 التليفون: ${state.data.phone}\n📝 الوصف: ${state.data.description}\n\nموافق قول "تمام" أو "لغي"`);
     }
     if (step === 'collecting_store_confirm') {
         if (['تمام', 'نعم', 'ايوه', 'موافق', 'افق', 'تأكيد'].some(w => body.includes(w))) {
             const s = createStore(state.data.ownerName, state.data.storeName, state.data.category, state.data.city, state.data.phone, state.data.description);
             state.step = 'start'; state.data = {};
-            return await client.sendMessage(phone, `يييس! تم المتجر يا ${s.ownerName}! 🎉🏪\n📦 الاسم: ${s.storeName}\n🔖 رقم: ${s.id}\n\nفريق MIX SHOP هيتواصل معاك 💪`);
-        } else { state.step = 'start'; state.data = {}; return await client.sendMessage(phone, 'مفيش مشكلة! تم الإلغاء 😊'); }
+            return await sendMsg(sock, phone, `يييس! تم المتجر يا ${s.ownerName}! 🎉🏪\n📦 الاسم: ${s.storeName}\n🔖 رقم: ${s.id}\n\nفريق MIX SHOP هيتواصل معاك 💪`);
+        } else { state.step = 'start'; state.data = {}; return await sendMsg(sock, phone, 'مفيش مشكلة! تم الإلغاء 😊'); }
     }
 
     if (step === 'buying_select_product') {
         const p = getProductById(body);
-        if (!p) return await client.sendMessage(phone, 'مش لاقي المنتج 🤔\nقوللي رقم تاني.');
+        if (!p) return await sendMsg(sock, phone, 'مش لاقي المنتج 🤔\nقوللي رقم تاني.');
         state.data.currentProduct = p; state.step = 'buying_qty';
-        return await client.sendMessage(phone, `${p.name} اختيار ممتاز! 👌\nالسعر: ${p.price} ج.م\nعايز كام واحد؟`);
+        return await sendMsg(sock, phone, `${p.name} اختيار ممتاز! 👌\nالسعر: ${p.price} ج.م\nعايز كام واحد؟`);
     }
     if (step === 'buying_qty') {
         const qty = parseInt(body);
-        if (isNaN(qty) || qty < 1) return await client.sendMessage(phone, 'ادلنا رقم يا غالي 😅');
+        if (isNaN(qty) || qty < 1) return await sendMsg(sock, phone, 'ادلنا رقم يا غالي 😅');
         if (!state.data.cart) state.data.cart = [];
         state.data.cart.push({ productId: state.data.currentProduct.id, qty }); state.step = 'buying_action';
-        return await client.sendMessage(phone, `تمام! ${state.data.currentProduct.name} x${qty} ✅\n\n1️⃣ تضيف حاجة تانية\n2️⃣ تخلص الطلب\n3️⃣ تشوف السلة\nقوللي رقم 😊`);
+        return await sendMsg(sock, phone, `تمام! ${state.data.currentProduct.name} x${qty} ✅\n\n1️⃣ تضيف حاجة تانية\n2️⃣ تخلص الطلب\n3️⃣ تشوف السلة\nقوللي رقم 😊`);
     }
     if (step === 'buying_action') {
         if (body === '1' || body.includes('اضافة')) {
             state.step = 'buying_select_product';
             let list = 'اختار رقم:\n\n';
             DATA.products.forEach(p => { list += `${p.id}️⃣ ${p.name} - ${p.price} ج.م\n`; });
-            return await client.sendMessage(phone, list);
+            return await sendMsg(sock, phone, list);
         }
         if (body === '2' || body.includes('تمام') || body.includes('خلص')) {
-            if (!state.data.cart?.length) { state.step = 'start'; return await client.sendMessage(phone, 'السلة فاضية 😅'); }
+            if (!state.data.cart?.length) { state.step = 'start'; return await sendMsg(sock, phone, 'السلة فاضية 😅'); }
             state.step = 'buying_name';
-            return await client.sendMessage(phone, 'قوللي اسمك 👤');
+            return await sendMsg(sock, phone, 'قوللي اسمك 👤');
         }
         if (body === '3' || body.includes('سلة')) {
-            if (!state.data.cart?.length) return await client.sendMessage(phone, 'السلة فاضية 😅');
+            if (!state.data.cart?.length) return await sendMsg(sock, phone, 'السلة فاضية 😅');
             let msg = '🛒 السلة:\n\n'; let total = 0;
             state.data.cart.forEach((item, i) => { const p = getProductById(item.productId); if (p) { const sub = p.price * item.qty; total += sub; msg += `${i + 1}. ${p.name} x${item.qty} = ${sub} ج.م\n`; } });
             msg += `\n💰 الإجمالي: ${total} ج.م\n\nعايز تضيف حاجة ولا تخلص؟ 😊`;
-            return await client.sendMessage(phone, msg);
+            return await sendMsg(sock, phone, msg);
         }
-        return await client.sendMessage(phone, 'قوللي 1، 2، أو 3 😊');
+        return await sendMsg(sock, phone, 'قوللي 1، 2، أو 3 😊');
     }
-    if (step === 'buying_name') { state.data.customerName = body; state.step = 'buying_phone'; return await client.sendMessage(phone, `تمام يا ${body}! 🤝\nubicado رقم التليفون:`); }
-    if (step === 'buying_phone') { state.data.customerPhone = body; state.step = 'buying_address'; return await client.sendMessage(phone, 'العنوان بالتفصيل (مدينة، شارع، علامة):'); }
-    if (step === 'buying_address') { state.data.address = body; state.step = 'buying_notes'; return await client.sendMessage(phone, 'ملاحظات للتوصيل؟ (لو مش عايز اكتب "مش عايز"):'); }
+    if (step === 'buying_name') { state.data.customerName = body; state.step = 'buying_phone'; return await sendMsg(sock, phone, `تمام يا ${body}! 🤝\nubicado رقم التليفون:`); }
+    if (step === 'buying_phone') { state.data.customerPhone = body; state.step = 'buying_address'; return await sendMsg(sock, phone, 'العنوان بالتفصيل (مدينة، شارع، علامة):'); }
+    if (step === 'buying_address') { state.data.address = body; state.step = 'buying_notes'; return await sendMsg(sock, phone, 'ملاحظات للتوصيل؟ (لو مش عايز اكتب "مش عايز"):'); }
     if (step === 'buying_notes') {
         state.data.notes = body === 'مش عايز' ? '' : body;
         let summary = '📋 الطلب:\n\n'; let total = 0;
@@ -270,22 +283,22 @@ async function handleFormSteps(state, body, client, phone, name) {
         if (state.data.notes) summary += `\n📝 ${state.data.notes}`;
         summary += '\n\nكل حاجة تمام؟ قول "تمام" أو "لغي" 😊';
         state.step = 'buying_confirm';
-        return await client.sendMessage(phone, summary);
+        return await sendMsg(sock, phone, summary);
     }
     if (step === 'buying_confirm') {
         if (['تمام', 'نعم', 'ايوه', 'موافق', 'تأكيد'].some(w => body.includes(w))) {
             const order = createOrder(state.data.cart, state.data.customerName, state.data.customerPhone, state.data.address, state.data.notes);
             io.emit('newOrder', order); state.step = 'start'; state.data = {};
-            return await client.sendMessage(phone, `يييس! تم الطلب يا ${order.customerName}! 🎉\n🔖 رقم: ${order.id}\n💰 الإجمالي: ${order.total} ج.م\n⏳ الحالة: قيد المراجعة\n\nشكراً ليك 😊`);
-        } else { state.step = 'start'; state.data = {}; return await client.sendMessage(phone, 'مفيش مشكلة! الإلغاء تم 😊'); }
+            return await sendMsg(sock, phone, `يييس! تم الطلب يا ${order.customerName}! 🎉\n🔖 رقم: ${order.id}\n💰 الإجمالي: ${order.total} ج.م\n⏳ الحالة: قيد المراجعة\n\nشكراً ليك 😊`);
+        } else { state.step = 'start'; state.data = {}; return await sendMsg(sock, phone, 'مفيش مشكلة! الإلغاء تم 😊'); }
     }
 
     if (step === 'tracking_phone') {
         const orders = getOrderByPhone(body); state.step = 'start';
-        if (!orders.length) return await client.sendMessage(phone, `مش لاقي طلبات بالرقم ${body} 🤔\nكلمنا على ${DATA.company?.supportPhone || '01274446542'}`);
+        if (!orders.length) return await sendMsg(sock, phone, `مش لاقي طلبات بالرقم ${body} 🤔\nكلمنا على ${DATA.company?.supportPhone || '01274446542'}`);
         let msg = '📦 طلباتك:\n\n';
         orders.forEach(o => { msg += `🔖 ${o.id} - ${o.customerName} - ${o.total} ج.م - ${o.status}\n📅 ${o.createdAt}\n\n`; });
-        return await client.sendMessage(phone, msg);
+        return await sendMsg(sock, phone, msg);
     }
 
     return false;
@@ -317,37 +330,38 @@ ${productsList ? `\n🔥 أكتر المنتجات مبيعاً:\n${productsList
 // Anti-spam: track last reply time per user
 const lastReplyTime = {};
 
-// Main message handler
-async function handleMsg(sid, msg) {
-    if (msg.fromMe) return;
-    if (!msg.from || !msg.from.endsWith('@c.us')) return;
+// Main message handler (Baileys)
+async function handleMsg(sock, msg) {
+    if (!msg || !msg.key || !msg.key.remoteJid) return;
+    if (msg.key.fromMe) return;
+
+    const phone = msg.key.remoteJid;
+    if (phone === 'status@broadcast' || phone.endsWith('@g.us')) return;
 
     DB.stats.messagesReceived = (DB.stats.messagesReceived || 0) + 1;
     saveDB(); io.emit('statsUpdate', DB.stats);
 
-    const phone = msg.from;
-    const name = msg.pushname || 'عميل';
-    let body = msg.body?.trim() || "";
+    const name = msg.pushName || 'عميل';
+    let body = (msg.message?.conversation || msg.message?.extendedTextMessage?.text || '').trim();
     const state = getUserState(phone);
 
-    const msgId = msg.id?._serialized || Math.random().toString();
+    const msgId = `${phone}:${msg.key.id || Math.random().toString()}`;
     if (processedMsgs.has(msgId)) return;
     processedMsgs.add(msgId);
     setTimeout(() => processedMsgs.delete(msgId), 30000);
 
-    const client = sessions[sid]?.client;
-    if (!client) return;
+    if (!sock) return;
 
-    if (msg.hasMedia) {
-        logActivity(`[MEDIA] From: ${phone} Type: ${msg.type}`);
-        return await client.sendMessage(phone, `شكراً يا ${name}! 😊\nمقدرش أشوف الصور حالياً.\nاكتبلي اللي عايزه بالكلام وأنا هساعدك! 🙏`);
+    if (msg.message?.imageMessage || msg.message?.videoMessage || msg.message?.audioMessage || msg.message?.documentMessage || msg.message?.stickerMessage) {
+        logActivity(`[MEDIA] From: ${phone} Name: ${name}`);
+        return await sendMsg(sock, phone, `شكراً يا ${name}! 😊\nمقدرش أشوف الصور حالياً.\nاكتبلي اللي عايزه بالكلام وأنا هساعدك! 🙏`);
     }
 
     logActivity(`[MSG] From: ${phone} Name: ${name} Body: ${body}`);
 
     if (!body || body.length === 0) return;
 
-    const handled = await handleFormSteps(state, body, client, phone, name);
+    const handled = await handleFormSteps(state, body, sock, phone, name);
     if (handled) return;
 
     if (state.step !== 'start') return;
@@ -355,7 +369,7 @@ async function handleMsg(sid, msg) {
     if (!state.greeted) {
         state.greeted = true;
         const welcome = getWelcomeMsg(name);
-        await client.sendMessage(phone, welcome);
+        await sendMsg(sock, phone, welcome);
         return;
     }
 
@@ -364,29 +378,29 @@ async function handleMsg(sid, msg) {
     if (aiResponse) {
         const lower = aiResponse.toLowerCase();
 
-        if (lower.includes('[action:show_products]')) { await executeAction('show_products', {}, client, phone, name); return; }
-        if (lower.includes('[action:search]')) { const qMatch = aiResponse.match(/\[action:search:(.+?)\]/); await executeAction('search', { query: qMatch ? qMatch[1] : body }, client, phone, name); return; }
-        if (lower.includes('[action:create_account]')) { await executeAction('create_account', {}, client, phone, name); return; }
-        if (lower.includes('[action:create_store]')) { await executeAction('create_store', {}, client, phone, name); return; }
-        if (lower.includes('[action:buy]')) { await executeAction('buy', {}, client, phone, name); return; }
-        if (lower.includes('[action:track_order]')) { await executeAction('track_order', {}, client, phone, name); return; }
-        if (lower.includes('[action:support]')) { await executeAction('support', { reason: body }, client, phone, name); return; }
-        if (lower.includes('[action:subscribe_offers]')) { await executeAction('subscribe_offers', {}, client, phone, name); return; }
-        if (lower.includes('[action:unsubscribe_offers]')) { await executeAction('unsubscribe_offers', {}, client, phone, name); return; }
+        if (lower.includes('[action:show_products]')) { await executeAction('show_products', {}, sock, phone, name); return; }
+        if (lower.includes('[action:search]')) { const qMatch = aiResponse.match(/\[action:search:(.+?)\]/); await executeAction('search', { query: qMatch ? qMatch[1] : body }, sock, phone, name); return; }
+        if (lower.includes('[action:create_account]')) { await executeAction('create_account', {}, sock, phone, name); return; }
+        if (lower.includes('[action:create_store]')) { await executeAction('create_store', {}, sock, phone, name); return; }
+        if (lower.includes('[action:buy]')) { await executeAction('buy', {}, sock, phone, name); return; }
+        if (lower.includes('[action:track_order]')) { await executeAction('track_order', {}, sock, phone, name); return; }
+        if (lower.includes('[action:support]')) { await executeAction('support', { reason: body }, sock, phone, name); return; }
+        if (lower.includes('[action:subscribe_offers]')) { await executeAction('subscribe_offers', {}, sock, phone, name); return; }
+        if (lower.includes('[action:unsubscribe_offers]')) { await executeAction('unsubscribe_offers', {}, sock, phone, name); return; }
 
-        return await client.sendMessage(phone, aiResponse);
+        return await sendMsg(sock, phone, aiResponse);
     }
 
     if (!lastReplyTime[phone] || Date.now() - lastReplyTime[phone] > 60000) {
         lastReplyTime[phone] = Date.now();
-        return await client.sendMessage(phone, `معلش يا ${name} 😅\nفي مشكلة مؤقتة. كلمنا على ${DATA.company?.supportPhone || '01274446542'}`);
+        return await sendMsg(sock, phone, `معلش يا ${name} 😅\nفي مشكلة مؤقتة. كلمنا على ${DATA.company?.supportPhone || '01274446542'}`);
     }
 }
 
 // API Routes
 app.get('/api/sessions', (req, res) => { res.json({ success: true, sessions: Object.keys(sessions).map(id => ({ id, ready: sessions[id].ready })) }); });
 app.post('/api/add-session', (req, res) => { const { id } = req.body; if (!id || sessions[id]) return res.json({ success: false }); sessions[id] = { ready: false }; createSession(id); res.json({ success: true }); });
-app.post('/api/delete-session', (req, res) => { const { id } = req.body; if (!sessions[id]) return res.json({ success: false }); sessions[id].client.destroy(); delete sessions[id]; res.json({ success: true }); });
+app.post('/api/delete-session', (req, res) => { const { id } = req.body; if (!sessions[id]) return res.json({ success: false }); try { sessions[id].sock?.end(undefined, 'deleted by api'); } catch (e) {} delete sessions[id]; res.json({ success: true }); });
 app.get('/api/orders', (req, res) => res.json({ success: true, orders: DB.orders }));
 app.get('/api/customers', (req, res) => res.json({ success: true, customers: DB.customers || [] }));
 app.get('/api/stores', (req, res) => res.json({ success: true, stores: DB.stores || [] }));
@@ -404,7 +418,7 @@ app.post('/api/send-campaign', async (req, res) => {
     const session = sessions[sessionId || 'default'];
     if (!session?.ready) return res.json({ success: false });
     let sent = 0;
-    for (const num of numbers) { try { await session.client.sendMessage(num.includes('@c.us') ? num : `${num.replace(/\D/g, '')}@c.us`, message); sent++; await new Promise(r => setTimeout(r, 2000)); } catch (e) {} }
+    for (const num of numbers) { try { await session.sock.sendMessage(num.includes('@') ? num : `${num.replace(/\D/g, '')}@c.us`, { text: message }); sent++; await new Promise(r => setTimeout(r, 2000)); } catch (e) {} }
     res.json({ success: true, sent });
 });
 app.post('/api/config', (req, res) => {
@@ -421,27 +435,78 @@ app.post('/api/config', (req, res) => {
 });
 app.get('/api/config', (req, res) => { const sid = req.query.sessionId || 'default'; res.json({ success: true, config: DB.sessions_config?.[sid]?.config || DATA.company || {} }); });
 
-// Sessions
-function createSession(sid) {
-    if (!sessions[sid]) sessions[sid] = { ready: false };
-    const client = new Client({
-        authStrategy: new LocalAuth({ clientId: sid }),
-        puppeteer: {
-            headless: true,
-            executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage', '--disable-accelerated-2d-canvas', '--no-first-run', '--no-zygote', '--single-process', '--disable-gpu', '--disable-extensions']
-        }
-    });
-    sessions[sid].client = client;
-    client.on('qr', q => { qrcodeTerminal.generate(q, { small: true }); QRCode.toDataURL(q, (e, url) => io.emit('qrUpdate', { id: sid, qr: url })); logActivity(`[QR] Session ${sid} waiting for scan...`); });
-    client.on('ready', () => { sessions[sid].ready = true; logActivity(`[SUCCESS] Session ${sid} ONLINE!`); io.emit('sessionReady', { id: sid }); io.emit('statsUpdate', DB.stats); });
-    client.on('authenticated', () => logActivity(`[AUTH] Session ${sid} Authenticated.`));
-    client.on('auth_failure', (msg) => logActivity(`[AUTH FAIL] Session ${sid}: ${msg}`));
-    client.on('disconnected', (reason) => { logActivity(`[DISCONNECTED] Session ${sid}: ${reason}`); sessions[sid].ready = false; });
-    client.on('message', m => handleMsg(sid, m));
-    client.on('message_create', m => { if (m.fromMe && m.type === 'poll_vote') handleMsg(sid, m); });
-    client.on('error', (err) => logActivity(`[CLIENT ERROR] Session ${sid}: ${err.message}`));
-    client.initialize().catch(e => logActivity(`Init Error: ${e.message}`));
+// Session management (Baileys)
+async function createSession(sid) {
+    try {
+        if (!sessions[sid]) sessions[sid] = { ready: false };
+        const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+
+        let version;
+        try { ({ version } = await fetchLatestBaileysVersion()); } catch (e) {}
+
+        const sock = makeWASocket({
+            version,
+            logger,
+            printQRInTerminal: false,
+            browser: ['MIX SHOP', 'Chrome', '3.0.0'],
+            auth: {
+                creds: state.creds,
+                keys: makeCacheableSignalKeyStore(state.keys, logger),
+            },
+        });
+
+        sessions[sid].sock = sock;
+        sessions[sid].ready = false;
+
+        sock.ev.on('creds.update', saveCreds);
+
+        sock.ev.on('connection.update', (update) => {
+            const { connection, lastDisconnect, qr } = update;
+            if (qr) {
+                try { qrcodeTerminal.generate(qr, { small: true }); } catch (e) {}
+                QRCode.toDataURL(qr, (e, url) => { if (!e && url) io.emit('qrUpdate', { id: sid, qr: url }); });
+                logActivity(`[QR] Session ${sid} waiting for scan...`);
+            }
+            if (connection === 'close') {
+                const statusCode = lastDisconnect?.error?.output?.statusCode;
+                if (statusCode !== DisconnectReason.loggedOut) {
+                    logActivity(`[RECONNECT] Session ${sid} closed (${statusCode}). Restarting in 3s...`);
+                    sessions[sid].ready = false;
+                    setTimeout(() => createSession(sid), 3000);
+                } else {
+                    sessions[sid].ready = false;
+                    logActivity(`[LOGGED OUT] Session ${sid}. Delete ./auth_info and scan again.`);
+                }
+            }
+            if (connection === 'open') {
+                sessions[sid].ready = true;
+                logActivity(`[SUCCESS] Session ${sid} ONLINE!`);
+                io.emit('sessionReady', { id: sid });
+                io.emit('statsUpdate', DB.stats);
+            }
+        });
+
+        sock.ev.on('messages.upsert', async ({ messages }) => {
+            for (const m of messages) {
+                try {
+                    if (!m.message) continue;
+                    if (m.key.fromMe) continue;
+                    const jid = m.key.remoteJid;
+                    if (!jid || jid === 'status@broadcast' || jid.endsWith('@g.us')) continue;
+                    await handleMsg(sock, m);
+                } catch (e) {
+                    logActivity(`[MSG ERROR] ${e.message}`);
+                }
+            }
+        });
+
+        sock.ev.on('error', (err) => logActivity(`[SOCKET ERROR] Session ${sid}: ${err?.message}`));
+    } catch (e) {
+        logActivity(`[INIT ERROR] Session ${sid}: ${e.message}`);
+    }
 }
 
-server.listen(7860, '0.0.0.0', () => { logActivity("MIX SHOP AI v3.0 STARTED ON 7860"); createSession('default'); });
+server.listen(7860, '0.0.0.0', () => {
+    logActivity("MIX SHOP AI v3.0 STARTED ON 7860");
+    createSession('default').catch(e => logActivity(`Init Error: ${e.message}`));
+});
