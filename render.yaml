@@ -1,0 +1,9 @@
+services:
+  - type: web
+    name: mix-shop-bot
+    runtime: docker
+    plan: free
+    envVars:
+      - key: NODE_ENV
+        value: production
+    healthCheckPath: /api/health

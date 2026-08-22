@@ -1,0 +1,157 @@
+{
+  "company": {
+    "name": "MIX SHOP",
+    "supportPhone": "01274446542",
+    "website": "https://mix-shop.xo.je/",
+    "privacyPolicy": "https://mix-shop.xo.je/privacy-policy",
+    "description": "منصة تجارة إلكترونية تجمع المنتجات والمتاجر والعملاء"
+  },
+  "products": [
+    {
+      "id": 1,
+      "name": "سماعات لاسلكية بلوتوث",
+      "price": 299,
+      "oldPrice": 450,
+      "currency": "جنيه",
+      "stock": 25,
+      "category": "إلكترونيات",
+      "brand": "SoundMax",
+      "description": "سماعات لاسلكية بتقنية البلوتوث 5.3، صوت نقي وتصميم مريح",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 2,
+      "name": "شاحن موبايل سريع 65 وات",
+      "price": 189,
+      "oldPrice": 250,
+      "currency": "جنيه",
+      "stock": 40,
+      "category": "إلكترونيات",
+      "brand": "ChargePro",
+      "description": "شاحن سريع بقوة 65 وات مع كيبل Type-C، يشحن من 0 إلى 80% في 30 دقيقة",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 3,
+      "name": "ساعة ذكية رياضية",
+      "price": 599,
+      "oldPrice": 899,
+      "currency": "جنيه",
+      "stock": 15,
+      "category": "إلكترونيات",
+      "brand": "FitBand",
+      "description": "ساعة ذكية مع شاشة AMOLED، قياس نبض القلب، مقاومة للماء",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 4,
+      "name": "حقيبة ظهر لابتوب",
+      "price": 349,
+      "oldPrice": 500,
+      "currency": "جنيه",
+      "stock": 30,
+      "category": "أزياء وإكسسوارات",
+      "brand": "CarryTech",
+      "description": "حقيبة ظهر مقاومة للماء مع جيب مبطن للابتوب حتى 15.6 إنش",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 5,
+      "name": "نظارة شمسية أنيقة",
+      "price": 249,
+      "oldPrice": 399,
+      "currency": "جنيه",
+      "stock": 20,
+      "category": "أزياء وإكسسوارات",
+      "brand": "SunStyle",
+      "description": "نظارة شمسية بحماية UV400 مع إطار خفيف وتصميم عصري",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 6,
+      "name": "එක්ස් بوكس يد تحكم لاسلكي",
+      "price": 799,
+      "oldPrice": 1100,
+      "currency": "جنيه",
+      "stock": 10,
+      "category": "ألعاب",
+      "brand": "GamePro",
+      "description": "يد تحكم لاسلكية متوافقة مع Xbox و PC مع اهتزاز مزدوج",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 7,
+      "name": "ماكينة قهوة إسبريسو",
+      "price": 1299,
+      "oldPrice": 1800,
+      "currency": "جنيه",
+      "stock": 8,
+      "category": "أدوات منزلية",
+      "brand": "BrewMaster",
+      "description": "ماكينة إسبريسو أوتوماتيكية بضغط 20 بار مع فنل حليب",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 8,
+      "name": "مكنسة كهربائية يدوية",
+      "price": 459,
+      "oldPrice": 650,
+      "currency": "جنيه",
+      "stock": 18,
+      "category": "أدوات منزلية",
+      "brand": "CleanPro",
+      "description": "مكنسة يدوية بقوة شفط 12000 باسكال مع فلتر HEPA",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 9,
+      "name": " Bobo محفظة جلد فاخرة",
+      "price": 179,
+      "oldPrice": 299,
+      "currency": "جنيه",
+      "stock": 50,
+      "category": "أزياء وإكسسوارات",
+      "brand": "LeatherCraft",
+      "description": "محفظة جلد طبيعي مع مكان للبطاقات والهاتف",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    },
+    {
+      "id": 10,
+      "name": "مروحة مكتبية USB",
+      "price": 129,
+      "oldPrice": 200,
+      "currency": "جنيه",
+      "stock": 35,
+      "category": "إلكترونيات",
+      "brand": "CoolAir",
+      "description": "مروحة مكتبية هادئة بتغذية USB مع 3 سرعات",
+      "image": "",
+      "url": "https://mix-shop.xo.je/"
+    }
+  ],
+  "categories": [
+    "إلكترونيات",
+    "أزياء وإكسسوارات",
+    "ألعاب",
+    "أدوات منزلية"
+  ],
+  "offers": [
+    {
+      "id": 1,
+      "title": "عروض الصيف 🔥",
+      "description": "خصم يصل إلى 40% على جميع المنتجات الإلكترونية",
+      "duration": "حتى نهاية أغسطس 2026",
+      "link": "https://mix-shop.xo.je/"
+    }
+  ],
+  "autoReplies": {}
+}
